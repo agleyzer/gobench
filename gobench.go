@@ -277,10 +277,13 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				req.Header.Add("Connection", "close")
 			}
 
+			req.Header.Add("Accept-encoding", "gzip")
+
 			resp, err := myclient.Do(req)
 			result.requests++
 
 			if err != nil {
+				fmt.Printf("Error connecting %s\n", err)
 				result.networkFailed++
 				continue
 			}
@@ -288,6 +291,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			_, errRead := ioutil.ReadAll(resp.Body)
 
 			if errRead != nil {
+				fmt.Printf("Error reading %s\n", err)
 				result.networkFailed++
 				continue
 			}
