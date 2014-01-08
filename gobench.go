@@ -153,6 +153,8 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	fmt.Printf("Read throughput:                %10d bytes/sec\n", readThroughput/elapsed)
 	fmt.Printf("Write throughput:               %10d bytes/sec\n", writeThroughput/elapsed)
 	fmt.Printf("Test time:                      %10d sec\n", elapsed)
+
+	DumpMetrics(metrics.DefaultRegistry)
 }
 
 func readLines(path string) (lines []string, err error) {
@@ -318,7 +320,15 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		result.requests++
 
 		if err != nil {
-			fmt.Printf("Error connecting %s\n", err)
+			if verboseMode {
+				fmt.Printf("Error connecting %s\n", err)
+			}
+
+			count := metrics.GetOrRegisterCounter("net_connect_errors",
+				metrics.DefaultRegistry)
+
+			count.Inc(1)
+
 			result.networkFailed++
 			return
 		}
@@ -326,8 +336,16 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		_, errRead := ioutil.ReadAll(resp.Body)
 
 		if errRead != nil {
-			fmt.Printf("Error reading %s\n", err)
+			if verboseMode {
+				fmt.Printf("Error reading %s\n", errRead)
+			}
+
 			result.networkFailed++
+
+			count := metrics.GetOrRegisterCounter("net_read_errors",
+				metrics.DefaultRegistry)
+			count.Inc(1)
+
 			return
 		}
 
@@ -336,6 +354,9 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		} else {
 			result.badFailed++
 		}
+
+		cnt := metrics.GetOrRegisterCounter(fmt.Sprintf("status_%d", resp.StatusCode), metrics.DefaultRegistry)
+		cnt.Inc(1)
 
 		if verboseMode {
 			respb, _ := httputil.DumpResponse(resp, false)
@@ -373,30 +394,74 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 
 // Output each metric in the given registry periodically using the given
 // logger.
-func LogLatency(r metrics.Registry, d time.Duration) {
+func LogMetrics(r metrics.Registry, d time.Duration) {
+	for {
+		time.Sleep(d)
+		DumpMetrics(r)
+	}
+}
+
+
+func DumpMetrics(r metrics.Registry) {
 	ms := func (d float64) float64 {
 		return d / float64(time.Millisecond)
 	}
 
-	l := log.New(os.Stderr, "latency: ", log.Ldate | log.Ltime)
+	r.Each(func(name string, i interface{}) {
+		switch m := i.(type) {
 
-	for {
-		time.Sleep(d)
+		case metrics.Counter:
+			log.Printf("counter %s: %d\n", name, m.Count())
 
-		m := r.Get("latency_timer").(metrics.Timer)
-		ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+		case metrics.Gauge:
+			log.Printf("gauge %s: %d\n", name, m.Value())
 
-		l.Printf("count: %d, min: %d, max: %d\n", m.Count(), m.Min(), m.Max())
-		l.Printf("mean: %.2f, stddev: %.2f, median: %.2f\n", ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
-		l.Printf("75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n", ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
-		l.Printf("rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
-			m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
-	}
+		case metrics.Healthcheck:
+			m.Check()
+			log.Printf("healthcheck %s: %v\n", name, m.Error())
+
+		case metrics.Histogram:
+			ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+			prefix := fmt.Sprintf("histogram %s:", name)
+
+			log.Printf("%s count: %d, min: %d, max: %d\n",
+				prefix, m.Count(), m.Min(), m.Max())
+
+			log.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
+				prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
+
+			log.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
+				prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
+
+		case metrics.Meter:
+			prefix := fmt.Sprintf("meter %s:", name)
+
+			log.Printf("%s count: %d, rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
+				prefix, m.Count(), m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+
+		case metrics.Timer:
+			ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+			prefix := fmt.Sprintf("timer %s:", name)
+
+			log.Printf("%s count: %d, min: %d, max: %d\n",
+				prefix, m.Count(), m.Min(), m.Max())
+
+			log.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
+				prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
+
+			log.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
+				prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
+
+			log.Printf("%s rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
+				prefix, m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+		}
+	})
 }
 
 
 func main() {
 	startTime := time.Now()
+
 	var done sync.WaitGroup
 	results := make(map[int]*Result)
 
@@ -420,7 +485,7 @@ func main() {
 
 	authCookie = generateAuthCookie()
 
-	go LogLatency(metrics.DefaultRegistry, time.Duration(1) * time.Second)
+	go LogMetrics(metrics.DefaultRegistry, time.Duration(1) * time.Second)
 
 	fmt.Printf("Dispatching %d clients\n", clients)
 
