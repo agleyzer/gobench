@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/md5"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -11,12 +12,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"os/signal"
 	"runtime"
 	"sync"
 	"syscall"
 	"time"
+	"github.com/rcrowley/go-metrics"
 )
 
 var (
@@ -30,6 +33,9 @@ var (
 	connectTimeout   int
 	writeTimeout     int
 	readTimeout      int
+	authCookie       string
+	verboseMode      bool
+	salt             string
 )
 
 type Configuration struct {
@@ -55,6 +61,25 @@ type MyConn struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	result       *Result
+}
+
+func md5str(text string) string {
+	h := md5.New()
+	io.WriteString(h, text)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func generateAuthCookie() string {
+	expiry := int32(time.Now().Add(time.Duration(10) * time.Hour).Unix())
+	path := "/*"
+
+	if salt == "" {
+		fmt.Printf("Salt is not defined: %s\n", salt)
+		os.Exit(1)
+	}
+
+	hash := md5str(fmt.Sprintf("%d%s%s", expiry, path, salt))
+	return fmt.Sprintf("auth=expires=%d~access=%s~md5=%s", expiry, path, hash)
 }
 
 func (this *MyConn) Read(b []byte) (n int, err error) {
@@ -90,6 +115,8 @@ func init() {
 	flag.IntVar(&connectTimeout, "tc", 5000, "Connect timeout (in milliseconds)")
 	flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
 	flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
+	flag.BoolVar(&verboseMode, "v", false, "Verbose mode")
+	flag.StringVar(&salt, "s", "", "Auth salt")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -263,6 +290,46 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		}
 	}()
 
+	processRequest := func (req *http.Request, myclient *http.Client) {
+		if verboseMode {
+			reqb, _ := httputil.DumpRequest(req, false)
+			fmt.Printf("==== REQUEST ===\n%s==== END REQUEST ===\n", reqb)
+		}
+
+		resp, err := myclient.Do(req)
+
+		result.requests++
+
+		if err != nil {
+			fmt.Printf("Error connecting %s\n", err)
+			result.networkFailed++
+			return
+		}
+
+		_, errRead := ioutil.ReadAll(resp.Body)
+
+		if errRead != nil {
+			fmt.Printf("Error reading %s\n", err)
+			result.networkFailed++
+			return
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			result.success++
+		} else {
+			result.badFailed++
+		}
+
+		if verboseMode {
+			respb, _ := httputil.DumpResponse(resp, false)
+			fmt.Printf("=== RESPONSE ===\n%s=== END RESPONSE ====\n", respb)
+		}
+
+		resp.Body.Close()
+	}
+
+	latencyTimer := metrics.GetOrRegisterTimer("latency_timer", metrics.DefaultRegistry)
+
 	myclient := MyClient(result, time.Duration(connectTimeout)*time.Millisecond,
 		time.Duration(readTimeout)*time.Millisecond,
 		time.Duration(writeTimeout)*time.Millisecond)
@@ -278,39 +345,40 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			}
 
 			req.Header.Add("Accept-encoding", "gzip")
+			req.Header.Add("Cookie", authCookie)
 
-			resp, err := myclient.Do(req)
-			result.requests++
-
-			if err != nil {
-				fmt.Printf("Error connecting %s\n", err)
-				result.networkFailed++
-				continue
-			}
-
-			_, errRead := ioutil.ReadAll(resp.Body)
-
-			if errRead != nil {
-				fmt.Printf("Error reading %s\n", err)
-				result.networkFailed++
-				continue
-			}
-
-			if resp.StatusCode == http.StatusOK {
-				result.success++
-			} else {
-				result.badFailed++
-			}
-
-			resp.Body.Close()
+			latencyTimer.Time(func() { processRequest(req, myclient) })
 		}
 	}
 
 	done.Done()
 }
 
-func main() {
+// Output each metric in the given registry periodically using the given
+// logger.
+func LogLatency(r metrics.Registry, d time.Duration) {
+	ms := func (d float64) float64 {
+		return d / float64(time.Millisecond)
+	}
 
+	l := log.New(os.Stderr, "latency: ", log.Ldate | log.Ltime)
+
+	for {
+		time.Sleep(d)
+
+		m := r.Get("latency_timer").(metrics.Timer)
+		ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+
+		l.Printf("count: %d, min: %d, max: %d\n", m.Count(), m.Min(), m.Max())
+		l.Printf("mean: %.2f, stddev: %.2f, median: %.2f\n", ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
+		l.Printf("75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n", ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
+		l.Printf("rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
+			m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+	}
+}
+
+
+func main() {
 	startTime := time.Now()
 	var done sync.WaitGroup
 	results := make(map[int]*Result)
@@ -332,6 +400,10 @@ func main() {
 	if goMaxProcs == "" {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 	}
+
+	authCookie = generateAuthCookie()
+
+	go LogLatency(metrics.DefaultRegistry, time.Duration(1) * time.Second)
 
 	fmt.Printf("Dispatching %d clients\n", clients)
 
