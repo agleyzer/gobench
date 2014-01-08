@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"bufio"
 	"bytes"
 	"crypto/md5"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"compress/gzip"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -154,18 +156,31 @@ func printResults(results map[int]*Result, startTime time.Time) {
 }
 
 func readLines(path string) (lines []string, err error) {
-
 	var file *os.File
 	var part []byte
 	var prefix bool
+	var reader *bufio.Reader
 
 	if file, err = os.Open(path); err != nil {
 		return
 	}
 	defer file.Close()
 
-	reader := bufio.NewReader(file)
+	if strings.HasSuffix(path, ".gz") {
+		zhandle, err1 := gzip.NewReader(file)
+
+		if (err1 != nil) {
+			err = err1
+			return
+		}
+
+		reader = bufio.NewReader(zhandle)
+	} else {
+		reader = bufio.NewReader(file)
+	}
+
 	buffer := bytes.NewBuffer(make([]byte, 0))
+
 	for {
 		if part, prefix, err = reader.ReadLine(); err != nil {
 			break
@@ -176,9 +191,11 @@ func readLines(path string) (lines []string, err error) {
 			buffer.Reset()
 		}
 	}
+
 	if err == io.EOF {
 		err = nil
 	}
+
 	return
 }
 
