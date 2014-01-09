@@ -24,6 +24,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"encoding/json"
 )
 
 var (
@@ -42,7 +43,7 @@ var (
 	salt             string
 	statsLog         *log.Logger
 	statsLogLocation string
-	statsServerPort  int
+	adminPort        int
 )
 
 type Configuration struct {
@@ -125,7 +126,7 @@ func init() {
 	flag.BoolVar(&verboseMode, "v", false, "Verbose mode")
 	flag.StringVar(&salt, "s", "", "Auth salt")
 	flag.StringVar(&statsLogLocation, "sl", "", "Stats log file location")
-	flag.IntVar(&statsServerPort, "sp", 0, "Stats HTTP port")
+	flag.IntVar(&adminPort, "ap", 0, "Admin HTTP port")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -408,6 +409,85 @@ func logMetrics(r metrics.Registry, d time.Duration) {
 	}
 }
 
+func dumpMetricsJson(r metrics.Registry) (result []byte) {
+	fms := func(d float64) int64 {
+		return int64(d / float64(time.Millisecond))
+	}
+
+	ims := func(d int64) int64 {
+		return d / int64(time.Millisecond)
+	}
+
+	out := make(map[string]map[string]interface{})
+
+	r.Each(func(name string, i interface{}) {
+		switch m := i.(type) {
+
+		case metrics.Counter:
+			if out["counters"] == nil {
+				out["counters"] = make(map[string]interface{})
+			}
+			out["counters"][name] = m.Count()
+
+		// case metrics.Gauge:
+		// 	result = append(result, fmt.Sprintf("gauge/%s: %d", name, m.Value()))
+
+		// case metrics.Healthcheck:
+		// 	m.Check()
+		// 	result = append(result, fmt.Sprintf("healthcheck/%s: %v", name, m.Error()))
+
+		// case metrics.Histogram:
+		// 	ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+		// 	prefix := fmt.Sprintf("histogram %s:", name)
+
+		// 	statsLog.Printf("%s count: %d, min: %d, max: %d\n",
+		// 		prefix, m.Count(), m.Min(), m.Max())
+
+		// 	statsLog.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
+		// 		prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
+
+		// 	statsLog.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
+		// 		prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
+
+		// case metrics.Meter:
+		// 	prefix := fmt.Sprintf("meter %s:", name)
+
+		// 	statsLog.Printf("%s count: %d, rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
+		// 		prefix, m.Count(), m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+
+		case metrics.Timer:
+			if out["metrics"] == nil {
+				out["metrics"] = make(map[string]interface{})
+			}
+
+			tm := make(map[string]interface{})
+			out["metrics"][name] = tm
+
+			ps := m.Percentiles([]float64{0.5, 0.90, 0.95, 0.99, 0.999})
+			tm["average"] = fms(m.Mean())
+			tm["count"] = m.Count()
+			tm["maximum"] = ims(m.Max())
+			tm["minimum"] = ims(m.Min())
+			tm["p50"] = fms(ps[0])
+			tm["p90"] = fms(ps[1])
+			tm["p95"] = fms(ps[2])
+			tm["p99"] = fms(ps[3])
+			tm["p999"] = fms(ps[4])
+			tm["rate_1"] = int64(m.Rate1())
+			tm["rate_5"] = int64(m.Rate5())
+			tm["rate_15"] = int64(m.Rate15())
+			tm["rate_mean"] = int64(m.RateMean())
+
+		default:
+			log.Fatalf("unsupported metric type for \"%s\"", name)
+		}
+	})
+
+	result, _ = json.Marshal(out)
+
+	return
+}
+
 func dumpMetrics(r metrics.Registry) (result []string) {
 	fms := func(d float64) float64 {
 		return d / float64(time.Millisecond)
@@ -468,24 +548,40 @@ func dumpMetrics(r metrics.Registry) (result []string) {
 	return
 }
 
-func statsResponse(w http.ResponseWriter, req *http.Request) {
-	for _, s := range dumpMetrics(metrics.DefaultRegistry) {
-		fmt.Fprintln(w, s)
-	}
-}
+func startAdminServer() {
+	http.HandleFunc("/stats.txt", func(w http.ResponseWriter, req *http.Request) {
+		for _, s := range dumpMetrics(metrics.DefaultRegistry) {
+			fmt.Fprintln(w, s)
+		}
+	})
 
-func startStatsServer() {
-	http.HandleFunc("/stats", statsResponse)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", statsServerPort), nil))
+	http.HandleFunc("/stats.json", func(w http.ResponseWriter, req *http.Request) {
+		w.Write(dumpMetricsJson(metrics.DefaultRegistry))
+	})
+
+	http.HandleFunc("/pid.txt", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprintln(w, syscall.Getpid())
+	})
+
+	http.HandleFunc("/ping.txt", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprintln(w, "pong")
+	})
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", adminPort), nil))
 }
 
 func startStatsLogging() *os.File {
 	var f *os.File
 	var err error
 
-	f, err = os.OpenFile(statsLogLocation, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("error opening file: %v", err)
+	// real /dev/stderr does not work well when you su into another user
+	if statsLogLocation == "STDERR" {
+		f = os.Stderr
+	} else {
+		f, err = os.OpenFile(statsLogLocation, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("error opening file: %v", err)
+		}
 	}
 
 	statsLog = log.New(f, "", log.LstdFlags)
@@ -526,8 +622,8 @@ func main() {
 		defer f.Close()
 	}
 
-	if statsServerPort != 0 {
-		go startStatsServer()
+	if adminPort != 0 {
+		go startAdminServer()
 	}
 
 	fmt.Printf("Dispatching %d clients\n", clients)
@@ -539,7 +635,9 @@ func main() {
 		go client(configuration, result, &done)
 
 	}
+
 	fmt.Println("Waiting for results...")
+
 	done.Wait()
 	printResults(results, startTime)
 }
