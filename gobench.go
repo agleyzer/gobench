@@ -1,13 +1,14 @@
 package main
 
 import (
-	"strings"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"crypto/md5"
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"github.com/rcrowley/go-metrics"
 	"io"
 	"io/ioutil"
 	"log"
@@ -17,11 +18,12 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
-	"compress/gzip"
-	"github.com/rcrowley/go-metrics"
 )
 
 var (
@@ -38,6 +40,9 @@ var (
 	authCookie       string
 	verboseMode      bool
 	salt             string
+	statsLog         *log.Logger
+	statsLogLocation string
+	statsServerPort  int
 )
 
 type Configuration struct {
@@ -119,6 +124,8 @@ func init() {
 	flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
 	flag.BoolVar(&verboseMode, "v", false, "Verbose mode")
 	flag.StringVar(&salt, "s", "", "Auth salt")
+	flag.StringVar(&statsLogLocation, "sl", "", "Stats log file location")
+	flag.IntVar(&statsServerPort, "sp", 0, "Stats HTTP port")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -153,8 +160,6 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	fmt.Printf("Read throughput:                %10d bytes/sec\n", readThroughput/elapsed)
 	fmt.Printf("Write throughput:               %10d bytes/sec\n", writeThroughput/elapsed)
 	fmt.Printf("Test time:                      %10d sec\n", elapsed)
-
-	DumpMetrics(metrics.DefaultRegistry)
 }
 
 func readLines(path string) (lines []string, err error) {
@@ -171,7 +176,7 @@ func readLines(path string) (lines []string, err error) {
 	if strings.HasSuffix(path, ".gz") {
 		zhandle, err1 := gzip.NewReader(file)
 
-		if (err1 != nil) {
+		if err1 != nil {
 			err = err1
 			return
 		}
@@ -309,7 +314,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		}
 	}()
 
-	processRequest := func (req *http.Request, myclient *http.Client) {
+	processRequest := func(req *http.Request, myclient *http.Client) {
 		if verboseMode {
 			reqb, _ := httputil.DumpRequest(req, false)
 			fmt.Printf("==== REQUEST ===\n%s==== END REQUEST ===\n", reqb)
@@ -355,7 +360,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			result.badFailed++
 		}
 
-		cnt := metrics.GetOrRegisterCounter(fmt.Sprintf("status_%d", resp.StatusCode), metrics.DefaultRegistry)
+		cnt := metrics.GetOrRegisterCounter(strconv.Itoa(resp.StatusCode), metrics.DefaultRegistry)
 		cnt.Inc(1)
 
 		if verboseMode {
@@ -394,70 +399,101 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 
 // Output each metric in the given registry periodically using the given
 // logger.
-func LogMetrics(r metrics.Registry, d time.Duration) {
+func logMetrics(r metrics.Registry, d time.Duration) {
 	for {
 		time.Sleep(d)
-		DumpMetrics(r)
+		for _, s := range dumpMetrics(r) {
+			statsLog.Println(s)
+		}
 	}
 }
 
-
-func DumpMetrics(r metrics.Registry) {
-	ms := func (d float64) float64 {
+func dumpMetrics(r metrics.Registry) (result []string) {
+	fms := func(d float64) float64 {
 		return d / float64(time.Millisecond)
+	}
+
+	ims := func(d int64) int64 {
+		return d / int64(time.Millisecond)
 	}
 
 	r.Each(func(name string, i interface{}) {
 		switch m := i.(type) {
 
 		case metrics.Counter:
-			log.Printf("counter %s: %d\n", name, m.Count())
+			result = append(result, fmt.Sprintf("counter/%s: %d", name, m.Count()))
 
-		case metrics.Gauge:
-			log.Printf("gauge %s: %d\n", name, m.Value())
+		// case metrics.Gauge:
+		// 	result = append(result, fmt.Sprintf("gauge/%s: %d", name, m.Value()))
 
-		case metrics.Healthcheck:
-			m.Check()
-			log.Printf("healthcheck %s: %v\n", name, m.Error())
+		// case metrics.Healthcheck:
+		// 	m.Check()
+		// 	result = append(result, fmt.Sprintf("healthcheck/%s: %v", name, m.Error()))
 
-		case metrics.Histogram:
-			ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
-			prefix := fmt.Sprintf("histogram %s:", name)
+		// case metrics.Histogram:
+		// 	ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
+		// 	prefix := fmt.Sprintf("histogram %s:", name)
 
-			log.Printf("%s count: %d, min: %d, max: %d\n",
-				prefix, m.Count(), m.Min(), m.Max())
+		// 	statsLog.Printf("%s count: %d, min: %d, max: %d\n",
+		// 		prefix, m.Count(), m.Min(), m.Max())
 
-			log.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
-				prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
+		// 	statsLog.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
+		// 		prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
 
-			log.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
-				prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
+		// 	statsLog.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
+		// 		prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
 
-		case metrics.Meter:
-			prefix := fmt.Sprintf("meter %s:", name)
+		// case metrics.Meter:
+		// 	prefix := fmt.Sprintf("meter %s:", name)
 
-			log.Printf("%s count: %d, rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
-				prefix, m.Count(), m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+		// 	statsLog.Printf("%s count: %d, rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
+		// 		prefix, m.Count(), m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
 
 		case metrics.Timer:
-			ps := m.Percentiles([]float64{0.5, 0.75, 0.95, 0.99, 0.999})
-			prefix := fmt.Sprintf("timer %s:", name)
+			ps := m.Percentiles([]float64{0.5, 0.90, 0.95, 0.99, 0.999})
+			result = append(result, fmt.Sprintf("timer/%s_ms: (average=%.0f, stdev=%.0f, count=%d, "+
+				"maximum=%d, minimum=%d, p50=%.0f, p90=%.0f, p95=%.0f, p99=%.0f, p999=%.0f,"+
+				"rate_1: %.0f, rate_5: %.0f, rate_15: %.0f, mean_rate: %.0f)",
+				name, fms(m.Mean()), fms(m.StdDev()), m.Count(), ims(m.Max()), ims(m.Min()),
+				fms(ps[0]), fms(ps[1]), fms(ps[2]), fms(ps[3]), fms(ps[4]),
+				m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean()))
 
-			log.Printf("%s count: %d, min: %d, max: %d\n",
-				prefix, m.Count(), m.Min(), m.Max())
-
-			log.Printf("%s mean: %.2f, stddev: %.2f, median: %.2f\n",
-				prefix, ms(m.Mean()), ms(m.StdDev()), ms(ps[0]))
-
-			log.Printf("%s 75%%: %.2f, 95%%: %.2f, 99%%: %.2f, 99.9%%: %.2f\n",
-				prefix, ms(ps[1]), ms(ps[2]), ms(ps[3]), ms(ps[4]))
-
-			log.Printf("%s rate: %.2f, %.2f, %.2f, mean rate: %.2f\n",
-				prefix, m.Rate1(), m.Rate5(), m.Rate15(), m.RateMean())
+		default:
+			log.Fatalf("unsupported metric type for \"%s\"", name)
 		}
 	})
+
+	sort.Strings(result)
+
+	return
 }
 
+func statsResponse(w http.ResponseWriter, req *http.Request) {
+	for _, s := range dumpMetrics(metrics.DefaultRegistry) {
+		fmt.Fprintln(w, s)
+	}
+}
+
+func startStatsServer() {
+	http.HandleFunc("/stats", statsResponse)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", statsServerPort), nil))
+}
+
+func startStatsLogging() *os.File {
+	var f *os.File
+	var err error
+
+	f, err = os.OpenFile(statsLogLocation, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+
+	statsLog = log.New(f, "", log.LstdFlags)
+
+	go logMetrics(metrics.DefaultRegistry, time.Duration(1)*time.Second)
+
+	return f
+}
 
 func main() {
 	startTime := time.Now()
@@ -485,7 +521,14 @@ func main() {
 
 	authCookie = generateAuthCookie()
 
-	go LogMetrics(metrics.DefaultRegistry, time.Duration(1) * time.Second)
+	if statsLogLocation != "" {
+		f := startStatsLogging()
+		defer f.Close()
+	}
+
+	if statsServerPort != 0 {
+		go startStatsServer()
+	}
 
 	fmt.Printf("Dispatching %d clients\n", clients)
 
