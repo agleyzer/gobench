@@ -82,8 +82,7 @@ func generateAuthCookie() string {
 	path := "/*"
 
 	if salt == "" {
-		fmt.Printf("Salt is not defined: %s\n", salt)
-		os.Exit(1)
+		log.Fatalf("Salt is not defined: %s\n", salt)
 	}
 
 	hash := md5str(fmt.Sprintf("%d%s%s", expiry, path, salt))
@@ -152,15 +151,15 @@ func printResults(results map[int]*Result, startTime time.Time) {
 		elapsed = 1
 	}
 
-	fmt.Println()
-	fmt.Printf("Requests:                       %10d hits\n", requests)
-	fmt.Printf("Successful requests:            %10d hits\n", success)
-	fmt.Printf("Network failed:                 %10d hits\n", networkFailed)
-	fmt.Printf("Bad requests failed (!2xx):     %10d hits\n", badFailed)
-	fmt.Printf("Successfull requests rate:      %10d hits/sec\n", success/elapsed)
-	fmt.Printf("Read throughput:                %10d bytes/sec\n", readThroughput/elapsed)
-	fmt.Printf("Write throughput:               %10d bytes/sec\n", writeThroughput/elapsed)
-	fmt.Printf("Test time:                      %10d sec\n", elapsed)
+	log.Println("FINAL RESULTS")
+	log.Printf("Requests:                       %10d hits\n", requests)
+	log.Printf("Successful requests:            %10d hits\n", success)
+	log.Printf("Network failed:                 %10d hits\n", networkFailed)
+	log.Printf("Bad requests failed (!2xx):     %10d hits\n", badFailed)
+	log.Printf("Successfull requests rate:      %10d hits/sec\n", success/elapsed)
+	log.Printf("Read throughput:                %10d bytes/sec\n", readThroughput/elapsed)
+	log.Printf("Write throughput:               %10d bytes/sec\n", writeThroughput/elapsed)
+	log.Printf("Test time:                      %10d sec\n", elapsed)
 }
 
 func readLines(path string) (lines []string, err error) {
@@ -532,7 +531,7 @@ func dumpMetrics(r metrics.Registry) (result []string) {
 		case metrics.Timer:
 			ps := m.Percentiles([]float64{0.5, 0.90, 0.95, 0.99, 0.999})
 			result = append(result, fmt.Sprintf("timer/%s_ms: (average=%.0f, stdev=%.0f, count=%d, "+
-				"maximum=%d, minimum=%d, p50=%.0f, p90=%.0f, p95=%.0f, p99=%.0f, p999=%.0f,"+
+				"maximum=%d, minimum=%d, p50=%.0f, p90=%.0f, p95=%.0f, p99=%.0f, p999=%.0f, "+
 				"rate_1: %.0f, rate_5: %.0f, rate_15: %.0f, mean_rate: %.0f)",
 				name, fms(m.Mean()), fms(m.StdDev()), m.Count(), ims(m.Max()), ims(m.Min()),
 				fms(ps[0]), fms(ps[1]), fms(ps[2]), fms(ps[3]), fms(ps[4]),
@@ -565,6 +564,16 @@ func startAdminServer() {
 
 	http.HandleFunc("/ping.txt", func(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprintln(w, "pong")
+	})
+
+	http.HandleFunc("/shutdown", func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprintln(w, "bye")
+		timer := time.NewTimer(time.Second)
+		go func() {
+			<- timer.C
+			log.Println("shutting down per admin request")
+			syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+		}()
 	})
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", adminPort), nil))
@@ -626,7 +635,7 @@ func main() {
 		go startAdminServer()
 	}
 
-	fmt.Printf("Dispatching %d clients\n", clients)
+	log.Printf("Dispatching %d clients\n", clients)
 
 	done.Add(clients)
 	for i := 0; i < clients; i++ {
@@ -636,7 +645,7 @@ func main() {
 
 	}
 
-	fmt.Println("Waiting for results...")
+	log.Println("Waiting for results...")
 
 	done.Wait()
 	printResults(results, startTime)
