@@ -6,8 +6,10 @@ import (
 	"compress/gzip"
 	"crypto/md5"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/MongoHQ/graphizer"
 	"github.com/rcrowley/go-metrics"
 	"io"
 	"io/ioutil"
@@ -24,7 +26,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"encoding/json"
 )
 
 var (
@@ -44,6 +45,7 @@ var (
 	statsLog         *log.Logger
 	statsLogLocation string
 	adminPort        int
+	graphiteServer   string
 )
 
 type Configuration struct {
@@ -126,6 +128,7 @@ func init() {
 	flag.StringVar(&salt, "s", "", "Auth salt")
 	flag.StringVar(&statsLogLocation, "sl", "", "Stats log file location")
 	flag.IntVar(&adminPort, "ap", 0, "Admin HTTP port")
+	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -408,7 +411,7 @@ func logMetrics(r metrics.Registry, d time.Duration) {
 	}
 }
 
-func dumpMetricsJson(r metrics.Registry) (result []byte) {
+func makeMetricsMap(r metrics.Registry) map[string]map[string]interface{} {
 	fms := func(d float64) int64 {
 		return int64(d / float64(time.Millisecond))
 	}
@@ -482,8 +485,11 @@ func dumpMetricsJson(r metrics.Registry) (result []byte) {
 		}
 	})
 
-	result, _ = json.Marshal(out)
+	return out
+}
 
+func dumpMetricsJson(r metrics.Registry) (result []byte) {
+	result, _ = json.Marshal(makeMetricsMap(r))
 	return
 }
 
@@ -570,7 +576,7 @@ func startAdminServer() {
 		fmt.Fprintln(w, "bye")
 		timer := time.NewTimer(time.Second)
 		go func() {
-			<- timer.C
+			<-timer.C
 			log.Println("shutting down per admin request")
 			syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 		}()
@@ -598,6 +604,42 @@ func startStatsLogging() *os.File {
 	go logMetrics(metrics.DefaultRegistry, time.Duration(1)*time.Second)
 
 	return f
+}
+
+func startGraphiteReporting() {
+	d := time.Duration(10) * time.Second
+	g := graphizer.NewGraphite(graphizer.TCP, graphiteServer)
+	h, err := os.Hostname()
+
+	if err != nil {
+		log.Fatalf("can't get my hostname: %v", err)
+	}
+
+	// Graphite uses periods to delimit nodes
+	graphite_host := strings.Replace(h, ".", "_", -1)
+
+	send := func(name string, value interface{}) {
+		full_name := graphite_host + ".generator." + name
+		// log.Printf("SENDING %s = %v to %v", full_name, value, g)
+		g.Send(graphizer.Metric{full_name, value, time.Now().Unix()})
+	}
+
+	for {
+		time.Sleep(d)
+
+		m := makeMetricsMap(metrics.DefaultRegistry)
+
+		for key, value := range m["counters"] {
+			send(key, value)
+		}
+
+		for metric, metric_map := range m["metrics"] {
+			for key, value := range metric_map.(map[string]interface{}) {
+				send(metric+"."+key, value)
+			}
+		}
+	}
+
 }
 
 func main() {
@@ -635,6 +677,10 @@ func main() {
 		go startAdminServer()
 	}
 
+	if graphiteServer != "" {
+		go startGraphiteReporting()
+	}
+
 	log.Printf("Dispatching %d clients\n", clients)
 
 	done.Add(clients)
@@ -648,5 +694,6 @@ func main() {
 	log.Println("Waiting for results...")
 
 	done.Wait()
+
 	printResults(results, startTime)
 }
