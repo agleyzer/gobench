@@ -46,6 +46,7 @@ var (
 	statsLogLocation string
 	adminPort        int
 	graphiteServer   string
+	generatorId      string
 )
 
 type Configuration struct {
@@ -129,6 +130,7 @@ func init() {
 	flag.StringVar(&statsLogLocation, "sl", "", "Stats log file location")
 	flag.IntVar(&adminPort, "ap", 0, "Admin HTTP port")
 	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
+	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -606,9 +608,7 @@ func startStatsLogging() *os.File {
 	return f
 }
 
-func startGraphiteReporting() {
-	d := time.Duration(10) * time.Second
-	g := graphizer.NewGraphite(graphizer.TCP, graphiteServer)
+func defaultGeneratorId() string {
 	h, err := os.Hostname()
 
 	if err != nil {
@@ -616,10 +616,15 @@ func startGraphiteReporting() {
 	}
 
 	// Graphite uses periods to delimit nodes
-	graphite_host := strings.Replace(h, ".", "_", -1)
+	return strings.Replace(h, ".", "_", -1)
+}
+
+func startGraphiteReporting() {
+	d := time.Duration(10) * time.Second
+	g := graphizer.NewGraphite(graphizer.TCP, graphiteServer)
 
 	send := func(name string, value interface{}) {
-		full_name := graphite_host + ".generator." + name
+		full_name := generatorId + ".generator." + name
 		// log.Printf("SENDING %s = %v to %v", full_name, value, g)
 		g.Send(graphizer.Metric{full_name, value, time.Now().Unix()})
 	}
