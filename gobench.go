@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"compress/gzip"
 	"crypto/md5"
 	"crypto/tls"
 	"flag"
@@ -19,7 +17,6 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -47,7 +44,7 @@ var (
 )
 
 type Configuration struct {
-	urls      []string
+	urls      chan []string
 	method    string
 	postData  []byte
 	requests  int64
@@ -164,48 +161,18 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	log.Printf("Test time:                      %10d sec\n", elapsed)
 }
 
-func readLines(path string) (lines []string, err error) {
-	var file *os.File
-	var part []byte
-	var prefix bool
-	var reader *bufio.Reader
+func readLines(path string, out chan []string, length int) {
+	reader := NewInfiniteLineReader(path)
+	defer reader.Close()
 
-	if file, err = os.Open(path); err != nil {
-		return
-	}
-	defer file.Close()
-
-	if strings.HasSuffix(path, ".gz") {
-		zhandle, err1 := gzip.NewReader(file)
-
-		if err1 != nil {
-			err = err1
-			return
-		}
-
-		reader = bufio.NewReader(zhandle)
-	} else {
-		reader = bufio.NewReader(file)
-	}
-
-	buffer := bytes.NewBuffer(make([]byte, 0))
+	buf := make([]string, length)
 
 	for {
-		if part, prefix, err = reader.ReadLine(); err != nil {
-			break
+		for i := 0; i < len(buf); i++ {
+			buf[i] = reader.NextLine()
 		}
-		buffer.Write(part)
-		if !prefix {
-			lines = append(lines, buffer.String())
-			buffer.Reset()
-		}
+		out <- buf
 	}
-
-	if err == io.EOF {
-		err = nil
-	}
-
-	return
 }
 
 func NewConfiguration() *Configuration {
@@ -228,7 +195,7 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:      make([]string, 0),
+		urls:      make(chan []string, clients),
 		method:    "GET",
 		postData:  nil,
 		keepAlive: keepAlive,
@@ -254,17 +221,19 @@ func NewConfiguration() *Configuration {
 	}
 
 	if urlsFilePath != "" {
-		fileLines, err := readLines(urlsFilePath)
-
-		if err != nil {
-			log.Fatalf("Error in ioutil.ReadFile for file: %s Error: ", urlsFilePath, err)
-		}
-
-		configuration.urls = fileLines
+		go readLines(urlsFilePath, configuration.urls, 1000)
 	}
 
 	if url != "" {
-		configuration.urls = append(configuration.urls, url)
+		go func() {
+			buffer := make([]string, 1000)
+			for i := 0; i < len(buffer); i++ {
+				buffer[i] = url
+			}
+			for {
+				configuration.urls <- buffer
+			}
+		}()
 	}
 
 	if postDataFilePath != "" {
@@ -379,21 +348,27 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		time.Duration(readTimeout)*time.Millisecond,
 		time.Duration(writeTimeout)*time.Millisecond)
 
-	for result.requests < configuration.requests {
-		for _, tmpUrl := range configuration.urls {
-			req, _ := http.NewRequest(configuration.method, tmpUrl, bytes.NewReader(configuration.postData))
+	var urls []string
 
-			if configuration.keepAlive == true {
-				req.Header.Add("Connection", "keep-alive")
-			} else {
-				req.Header.Add("Connection", "close")
-			}
-
-			req.Header.Add("Accept-encoding", "gzip")
-			req.Header.Add("Cookie", authCookie)
-
-			latencyTimer.Time(func() { processRequest(req, myclient) })
+	for i := 0; result.requests < configuration.requests; i++ {
+		// get more urls if we ran out
+		if urls == nil || i >= len(urls) {
+			urls = <-configuration.urls
+			i = 0
 		}
+
+		req, _ := http.NewRequest(configuration.method, urls[i], bytes.NewReader(configuration.postData))
+
+		if configuration.keepAlive == true {
+			req.Header.Add("Connection", "keep-alive")
+		} else {
+			req.Header.Add("Connection", "close")
+		}
+
+		req.Header.Add("Accept-encoding", "gzip")
+		req.Header.Add("Cookie", authCookie)
+
+		latencyTimer.Time(func() { processRequest(req, myclient) })
 	}
 
 	done.Done()
