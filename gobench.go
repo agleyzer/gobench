@@ -331,7 +331,10 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			result.badFailed++
 		}
 
-		cnt := metrics.GetOrRegisterCounter(strconv.Itoa(resp.StatusCode), metrics.DefaultRegistry)
+		szHist := metrics.DefaultRegistry.Get("response_size").(metrics.Histogram)
+		szHist.Update(resp.ContentLength)
+
+		cnt := metrics.GetOrRegisterCounter("response_code." + strconv.Itoa(resp.StatusCode), metrics.DefaultRegistry)
 		cnt.Inc(1)
 
 		if verboseMode {
@@ -412,6 +415,10 @@ func main() {
 	if graphiteServer != "" {
 		go startGraphiteReporting()
 	}
+
+	metrics.NewRegisteredHistogram("response_size",
+		metrics.DefaultRegistry,
+		metrics.NewExpDecaySample(1028, 0.015))
 
 	log.Printf("Dispatching %d clients\n", clients)
 
