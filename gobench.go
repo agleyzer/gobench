@@ -41,15 +41,17 @@ var (
 	adminPort        int
 	graphiteServer   string
 	generatorId      string
+	hostOverride	 string
 )
 
 type Configuration struct {
-	urls      chan []string
-	method    string
-	postData  []byte
-	requests  int64
-	period    int64
-	keepAlive bool
+	urls         chan []string
+	method       string
+	postData     []byte
+	requests     int64
+	period       int64
+	keepAlive    bool
+	hostOverride string
 }
 
 type Result struct {
@@ -125,6 +127,7 @@ func init() {
 	flag.IntVar(&adminPort, "ap", 0, "Admin HTTP port")
 	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
 	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
+	flag.StringVar(&hostOverride, "host", "", "Override host for all urls")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -195,11 +198,12 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:      make(chan []string, clients),
-		method:    "GET",
-		postData:  nil,
-		keepAlive: keepAlive,
-		requests:  int64((1 << 63) - 1)}
+		urls:         make(chan []string, clients),
+		method:       "GET",
+		postData:     nil,
+		keepAlive:    keepAlive,
+		requests:     int64((1 << 63) - 1),
+		hostOverride: hostOverride}
 
 	if period != -1 {
 		configuration.period = period
@@ -367,6 +371,11 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			req.Header.Add("Connection", "keep-alive")
 		} else {
 			req.Header.Add("Connection", "close")
+		}
+
+		if configuration.hostOverride != "" {
+			req.URL.Host = configuration.hostOverride
+			req.Host = configuration.hostOverride
 		}
 
 		req.Header.Add("Accept-encoding", "gzip")
