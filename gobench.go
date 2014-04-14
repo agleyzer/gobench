@@ -41,17 +41,18 @@ var (
 	adminPort        int
 	graphiteServer   string
 	generatorId      string
-	hostOverride	 string
+	hostOverride     string
+	hostFileOverride string
 )
 
 type Configuration struct {
-	urls         chan []string
-	method       string
-	postData     []byte
-	requests     int64
-	period       int64
-	keepAlive    bool
-	hostOverride string
+	urls      chan string
+	hosts     chan string
+	method    string
+	postData  []byte
+	requests  int64
+	period    int64
+	keepAlive bool
 }
 
 type Result struct {
@@ -127,7 +128,9 @@ func init() {
 	flag.IntVar(&adminPort, "ap", 0, "Admin HTTP port")
 	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
 	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
-	flag.StringVar(&hostOverride, "host", "", "Override host for all urls")
+	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
+	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
+
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -164,17 +167,12 @@ func printResults(results map[int]*Result, startTime time.Time) {
 	log.Printf("Test time:                      %10d sec\n", elapsed)
 }
 
-func readLines(path string, out chan []string, length int) {
+func readLines(path string, out chan string) {
 	reader := NewInfiniteLineReader(path)
 	defer reader.Close()
 
-	buf := make([]string, length)
-
 	for {
-		for i := 0; i < len(buf); i++ {
-			buf[i] = reader.NextLine()
-		}
-		out <- buf
+		out <- reader.NextLine()
 	}
 }
 
@@ -198,12 +196,12 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		urls:         make(chan []string, clients),
-		method:       "GET",
-		postData:     nil,
-		keepAlive:    keepAlive,
-		requests:     int64((1 << 63) - 1),
-		hostOverride: hostOverride}
+		urls:      make(chan string, clients),
+		hosts:     nil,
+		method:    "GET",
+		postData:  nil,
+		keepAlive: keepAlive,
+		requests:  int64((1 << 63) - 1)}
 
 	if period != -1 {
 		configuration.period = period
@@ -225,17 +223,13 @@ func NewConfiguration() *Configuration {
 	}
 
 	if urlsFilePath != "" {
-		go readLines(urlsFilePath, configuration.urls, 1000)
+		go readLines(urlsFilePath, configuration.urls)
 	}
 
 	if url != "" {
 		go func() {
-			buffer := make([]string, 1000)
-			for i := 0; i < len(buffer); i++ {
-				buffer[i] = url
-			}
 			for {
-				configuration.urls <- buffer
+				configuration.urls <- url
 			}
 		}()
 	}
@@ -250,6 +244,19 @@ func NewConfiguration() *Configuration {
 		}
 
 		configuration.postData = data
+	}
+
+	if hostFileOverride != "" {
+		configuration.hosts = make(chan string, clients)
+		go readLines(hostFileOverride, configuration.hosts)
+
+	} else if hostOverride != "" {
+		configuration.hosts = make(chan string, clients)
+		go func() {
+			for {
+				configuration.hosts <- hostOverride
+			}
+		}()
 	}
 
 	return configuration
@@ -275,8 +282,8 @@ func MyClient(result *Result, connectTimeout, readTimeout, writeTimeout time.Dur
 
 	return &http.Client{
 		Transport: &http.Transport{
-			Dial:            TimeoutDialer(result, connectTimeout, readTimeout, writeTimeout),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			Dial:              TimeoutDialer(result, connectTimeout, readTimeout, writeTimeout),
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 			DisableKeepAlives: !keepAlive,
 		},
 	}
@@ -339,7 +346,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		szHist := metrics.DefaultRegistry.Get("response_size").(metrics.Histogram)
 		szHist.Update(resp.ContentLength)
 
-		cnt := metrics.GetOrRegisterCounter("response_code." + strconv.Itoa(resp.StatusCode), metrics.DefaultRegistry)
+		cnt := metrics.GetOrRegisterCounter("response_code."+strconv.Itoa(resp.StatusCode), metrics.DefaultRegistry)
 		cnt.Inc(1)
 
 		if verboseMode {
@@ -356,16 +363,10 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		time.Duration(readTimeout)*time.Millisecond,
 		time.Duration(writeTimeout)*time.Millisecond)
 
-	var urls []string
-
-	for i := 0; result.requests < configuration.requests; i++ {
-		// get more urls if we ran out
-		if urls == nil || i >= len(urls) {
-			urls = <-configuration.urls
-			i = 0
-		}
-
-		req, _ := http.NewRequest(configuration.method, urls[i], bytes.NewReader(configuration.postData))
+	for result.requests < configuration.requests {
+		req, _ := http.NewRequest(configuration.method,
+			<-configuration.urls,
+			bytes.NewReader(configuration.postData))
 
 		if configuration.keepAlive == true {
 			req.Header.Add("Connection", "keep-alive")
@@ -373,9 +374,10 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			req.Header.Add("Connection", "close")
 		}
 
-		if configuration.hostOverride != "" {
-			req.URL.Host = configuration.hostOverride
-			req.Host = configuration.hostOverride
+		if configuration.hosts != nil {
+			host := <-configuration.hosts
+			req.URL.Host = host
+			req.Host = host
 		}
 
 		req.Header.Add("Accept-encoding", "gzip")
