@@ -309,13 +309,14 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 
 		if err != nil {
 			if verboseMode {
-				fmt.Printf("Error connecting %s\n", err)
+				fmt.Printf("Error connecting to %s: %s\n", req.URL, err)
 			}
 
-			count := metrics.GetOrRegisterCounter("net_connect_errors",
-				metrics.DefaultRegistry)
+			metrics.GetOrRegisterCounter("net_connect_errors." + req.URL.Host,
+				metrics.DefaultRegistry).Inc(1)
 
-			count.Inc(1)
+			metrics.GetOrRegisterCounter("net_connect_errors",
+				metrics.DefaultRegistry).Inc(1)
 
 			result.networkFailed++
 			return
@@ -325,14 +326,13 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 
 		if errRead != nil {
 			if verboseMode {
-				fmt.Printf("Error reading %s\n", errRead)
+				fmt.Printf("Error reading %s: %s\n", req.URL, errRead)
 			}
 
 			result.networkFailed++
 
-			count := metrics.GetOrRegisterCounter("net_read_errors",
-				metrics.DefaultRegistry)
-			count.Inc(1)
+			metrics.GetOrRegisterCounter("net_read_errors",
+				metrics.DefaultRegistry).Inc(1)
 
 			return
 		}
