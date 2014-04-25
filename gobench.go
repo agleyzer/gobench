@@ -23,11 +23,12 @@ import (
 )
 
 var (
-	requests         int64
+	requestLimit     int64
 	period           int64
 	clients          int
 	url              string
 	urlsFilePath     string
+	requestsFilePath string
 	keepAlive        bool
 	postDataFilePath string
 	connectTimeout   int
@@ -46,13 +47,13 @@ var (
 )
 
 type Configuration struct {
-	urls      chan string
-	hosts     chan string
-	method    string
-	postData  []byte
-	requests  int64
-	period    int64
-	keepAlive bool
+	requests   	 chan *http.Request
+	hosts     	 chan string
+	method    	 string
+	postData  	 []byte
+	requestLimit int64
+	period       int64
+	keepAlive 	 bool
 }
 
 type Result struct {
@@ -112,10 +113,11 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 }
 
 func init() {
-	flag.Int64Var(&requests, "r", -1, "Number of requests per client")
+	flag.Int64Var(&requestLimit, "r", -1, "Number of requests per client")
 	flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
 	flag.StringVar(&url, "u", "", "URL")
-	flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
+	flag.StringVar(&urlsFilePath, "uf", "", "URLs file path (line separated)")
+	flag.StringVar(&requestsFilePath, "f", "", "Full requests file path")
 	flag.BoolVar(&keepAlive, "k", true, "Do HTTP keep-alive")
 	flag.StringVar(&postDataFilePath, "d", "", "HTTP POST data file path")
 	flag.Int64Var(&period, "t", -1, "Period of time (in seconds)")
@@ -176,32 +178,41 @@ func readLines(path string, out chan string) {
 	}
 }
 
+func readRequests(path string, out chan *http.Request) {
+	reader := NewInfiniteRequestReader(path)
+	defer reader.Close()
+
+	for {
+		out <- reader.NextRequest()
+	}
+}
+
 func NewConfiguration() *Configuration {
 
-	if urlsFilePath == "" && url == "" {
+	if requestsFilePath == "" && urlsFilePath == "" && url == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	if requests == -1 && period == -1 {
+	if requestLimit == -1 && period == -1 {
 		fmt.Println("Requests or period must be provided")
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	if requests != -1 && period != -1 {
+	if requestLimit != -1 && period != -1 {
 		fmt.Println("Only one should be provided: [requests|period]")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	configuration := &Configuration{
-		urls:      make(chan string, clients),
-		hosts:     nil,
-		method:    "GET",
-		postData:  nil,
-		keepAlive: keepAlive,
-		requests:  int64((1 << 63) - 1)}
+		requests:     make(chan *http.Request, clients),
+		hosts:        nil,
+		method:       "GET",
+		postData:  	  nil,
+		keepAlive:    keepAlive,
+		requestLimit: int64((1 << 63) - 1)}
 
 	if period != -1 {
 		configuration.period = period
@@ -218,20 +229,8 @@ func NewConfiguration() *Configuration {
 		}()
 	}
 
-	if requests != -1 {
-		configuration.requests = requests
-	}
-
-	if urlsFilePath != "" {
-		go readLines(urlsFilePath, configuration.urls)
-	}
-
-	if url != "" {
-		go func() {
-			for {
-				configuration.urls <- url
-			}
-		}()
+	if requestLimit != -1 {
+		configuration.requestLimit = requestLimit
 	}
 
 	if postDataFilePath != "" {
@@ -244,6 +243,27 @@ func NewConfiguration() *Configuration {
 		}
 
 		configuration.postData = data
+	}
+
+	if requestsFilePath != "" {
+
+		go readRequests(requestsFilePath, configuration.requests)
+
+	} else if urlsFilePath != "" {
+		urls := make(chan string, clients)
+		go readLines(urlsFilePath, urls)
+		go func() {
+			for {
+				url := <- urls
+				configuration.requests <- RequestWithUrl(url, configuration)
+			}
+		}()
+	} else if url != "" {
+		go func() {
+			for {
+				configuration.requests <- RequestWithUrl(url, configuration)
+			}
+		}()
 	}
 
 	if hostFileOverride != "" {
@@ -260,6 +280,13 @@ func NewConfiguration() *Configuration {
 	}
 
 	return configuration
+}
+
+func RequestWithUrl(url string, configuration *Configuration) (*http.Request) {
+	req, _ := http.NewRequest(configuration.method,
+		url,
+		bytes.NewReader(configuration.postData))
+	return req
 }
 
 func TimeoutDialer(result *Result, connectTimeout, readTimeout, writeTimeout time.Duration) func(net, address string) (conn net.Conn, err error) {
@@ -363,10 +390,8 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		time.Duration(readTimeout)*time.Millisecond,
 		time.Duration(writeTimeout)*time.Millisecond)
 
-	for result.requests < configuration.requests {
-		req, _ := http.NewRequest(configuration.method,
-			<-configuration.urls,
-			bytes.NewReader(configuration.postData))
+	for result.requests < configuration.requestLimit {
+		req := <- configuration.requests
 
 		if configuration.keepAlive == true {
 			req.Header.Add("Connection", "keep-alive")
@@ -380,7 +405,6 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			req.Host = host
 		}
 
-		req.Header.Add("Accept-encoding", "gzip")
 		req.Header.Add("Cookie", authCookie)
 
 		latencyTimer.Time(func() { processRequest(req, myclient) })
