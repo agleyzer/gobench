@@ -66,6 +66,11 @@ func (irr *InfiniteRequestReader) NextRequest() *http.Request {
 			log.Fatalf("Request reader error: %v", err)
 		}
 
+		// Set scheme if not present in url
+		if req.URL.Scheme == "" {
+			req.URL.Scheme = "http"
+		}
+
 		// Need to make request read any body buffer before continuing
 		body := new(bytes.Buffer)
 		body.ReadFrom(req.Body)

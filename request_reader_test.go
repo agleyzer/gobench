@@ -64,6 +64,12 @@ func TestTwoRequestsWithHeaders(t *testing.T) {
 			t.Errorf("Expected [%s] but got [%s]", expectedValue, testHeader)
 		}
 	}
+
+	for _, req := range requests {
+		if req.URL.Scheme != "http" {
+			t.Errorf("Expected scheme http, but got %s", req.URL.Scheme)
+		}
+	}
 }
 
 func TestTwoRequestsWithHeadersAndBody(t *testing.T) {

@@ -99,7 +99,8 @@ var anyCMSURLMatcher *regexp.Regexp = regexp.MustCompile(`/cms/.+`)
 func writeRequest(req *http.Request, out io.Writer) {
 	if !isCMSRequest(req) || isInPlatforms(req, AllPlatforms) {
 		processRequest(req)
-		req.Write(out)
+		// use WriteProxy to force writing request URI with hostname and scheme
+		req.WriteProxy(out)
 	}
 }
 

@@ -106,6 +106,16 @@ func TestCMSRequestsForOtherPlatformsAreFiltered(t *testing.T) {
 			t.Fatalf("Expected EOF file error for %s but got %v", url, err)
 		}
 	}
+}
 
+func TestRequestSchemeIsMaintained(t *testing.T) {
+	req, err := tryWriteRequest("http://localhost/some/request")
 
+	if err != nil {
+		t.Errorf("Unable to write request: %v", err)
+	}
+
+	if req.URL.Scheme != "http" {
+		t.Fatalf("Expected scheme http, but got %s", req.URL.Scheme)
+	}
 }
