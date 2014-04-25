@@ -71,6 +71,9 @@ func (irr *InfiniteRequestReader) NextRequest() *http.Request {
 			req.URL.Scheme = "http"
 		}
 
+		// golang doesn't allow request.RequestURI to be set for client requests, so remove it
+		req.RequestURI = ""
+
 		// Need to make request read any body buffer before continuing
 		body := new(bytes.Buffer)
 		body.ReadFrom(req.Body)

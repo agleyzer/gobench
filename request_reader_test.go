@@ -52,24 +52,26 @@ func TestTwoRequestsWithHeaders(t *testing.T) {
 		"GET /foo HTTP/1.1\nHost: localhost\nX-Test: Test1\n\nGET /bar HTTP/1.1\nHost: localhost\nX-Test: Test2\n\n",
 		[]string { "/foo", "/bar" })
 
-	for _, req := range requests {
+	for i, req := range requests {
 		if req.Host != "localhost" {
 			t.Errorf("Expected [%s] but got [%s]", "localhost", req.Host)
 		}
-	}
 
-	for i, req := range requests {
 		expectedValue := fmt.Sprintf("Test%d", i+1)
 		if testHeader := req.Header.Get("X-Test"); testHeader != expectedValue {
 			t.Errorf("Expected [%s] but got [%s]", expectedValue, testHeader)
 		}
-	}
 
-	for _, req := range requests {
 		if req.URL.Scheme != "http" {
 			t.Errorf("Expected scheme http, but got %s", req.URL.Scheme)
 		}
+
+		if req.RequestURI != "" {
+			t.Errorf("req.RequestURI must not be set in golang client requests, got %s", req.RequestURI)
+		}
 	}
+
+
 }
 
 func TestTwoRequestsWithHeadersAndBody(t *testing.T) {
