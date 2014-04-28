@@ -2,14 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strings"
-	"net/http"
-	"io"
-	"bytes"
-	"io/ioutil"
 )
 
 type InfiniteRequestReader struct {
@@ -49,9 +49,9 @@ func (irr *InfiniteRequestReader) init() {
 
 func NewInfiniteRequestReader(path string) (result *InfiniteRequestReader) {
 	result = &InfiniteRequestReader{
-		path:    		path,
-		file:    		nil,
-		reader:  		nil,
+		path:           path,
+		file:           nil,
+		reader:         nil,
 		requestCounter: 0,
 	}
 	result.init()

@@ -1,18 +1,31 @@
+/*
+This is a utility used to convert/transform files representing a bunch of requests.
+
+In its first form, you can use it to process a file that contains urls, one per line, and produce
+the corresponding requests as they would be sent to the server, using the GET method.  Any additional
+transformations defined in writeRequest will be applied.
+
+In its second form, you can use it process a file that already contains request data, and apply the
+defined transformations before producing the output.
+
+The idea is to update this utility as additional types of requests or additional requirements per request are needed
+for load testing instances.
+ */
 package main
 
 import (
-	"flag"
-	"os"
 	"bufio"
-	"log"
-	"strings"
-	"compress/gzip"
-	"net/http"
-	"io"
 	"bytes"
+	"compress/gzip"
+	"flag"
+	"io"
 	"io/ioutil"
-	"regexp"
+	"log"
+	"net/http"
 	"net/textproto"
+	"os"
+	"regexp"
+	"strings"
 )
 
 var (
@@ -25,7 +38,7 @@ var (
 func init() {
 	flag.StringVar(&inputUrlsPath, "inUrls", "", "URLs input path (line separated)")
 	flag.StringVar(&inputRequestsPath, "in", "", "Full requests input path")
-	flag.StringVar(&outputRequestsPath, "out", "", "Full requests output path")
+	flag.StringVar(&outputRequestsPath, "out", "", "Full requests output path; using - will force output to stdout")
 }
 
 func main() {
@@ -43,7 +56,7 @@ func main() {
 		output = os.Stdout
 	} else {
 		file, err := os.Create(outputRequestsPath)
-		if (err != nil) {
+		if err != nil {
 			log.Fatalf("Unable to open %s for writing: %v", outputRequestsPath, err)
 		} else {
 			output = file
@@ -65,7 +78,7 @@ func main() {
 			req, err = http.ReadRequest(bufReader)
 		}
 
-		if (err != io.EOF) {
+		if err != io.EOF {
 			log.Fatalf("Premature error reading requests: %v", err)
 		}
 
@@ -78,7 +91,7 @@ func main() {
 			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
 				log.Printf("Unable to parse url %s into request: %v", url, err)
-			} else  {
+			} else {
 				writeRequest(req, output)
 			}
 		}
@@ -94,7 +107,6 @@ var AllPlatforms []string = append(AndroidPlatforms, IOSPlatforms...)
 
 var cmsMobileURLMatcher *regexp.Regexp = regexp.MustCompile(`/cms/mobile/v(\d+)/([^/]+)/([^/]+)/(.+)\..+`)
 var anyCMSURLMatcher *regexp.Regexp = regexp.MustCompile(`/cms/.+`)
-
 
 func writeRequest(req *http.Request, out io.Writer) {
 	if !isCMSRequest(req) || isInPlatforms(req, AllPlatforms) {
@@ -147,7 +159,7 @@ var AndroidInternationalVersion string = "3.9"
 func addVersionForAndroidInternational(req *http.Request) {
 	if isInPlatforms(req, AndroidPlatforms) {
 		androidInternationalCount += 1
-		if androidInternationalCount % 5 != 0 {
+		if androidInternationalCount%5 != 0 {
 			req.Header.Set(NytAppVersionHeader, AndroidInternationalVersion)
 		} else {
 			req.Header.Del(NytAppVersionHeader)
@@ -161,7 +173,6 @@ func inputReader(path string) io.ReadCloser {
 	if err != nil {
 		log.Fatalf("Failed: %v", err)
 	}
-
 
 	if strings.HasSuffix(path, ".gz") {
 		zhandle, err := gzip.NewReader(file)
