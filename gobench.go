@@ -47,13 +47,13 @@ var (
 )
 
 type Configuration struct {
-	requests   	 chan *http.Request
-	hosts     	 chan string
-	method    	 string
-	postData  	 []byte
+	requests     chan *http.Request
+	hosts        chan string
+	method       string
+	postData     []byte
 	requestLimit int64
 	period       int64
-	keepAlive 	 bool
+	keepAlive    bool
 }
 
 type Result struct {
@@ -210,7 +210,7 @@ func NewConfiguration() *Configuration {
 		requests:     make(chan *http.Request, clients),
 		hosts:        nil,
 		method:       "GET",
-		postData:  	  nil,
+		postData:     nil,
 		keepAlive:    keepAlive,
 		requestLimit: int64((1 << 63) - 1)}
 
@@ -254,7 +254,7 @@ func NewConfiguration() *Configuration {
 		go readLines(urlsFilePath, urls)
 		go func() {
 			for {
-				url := <- urls
+				url := <-urls
 				configuration.requests <- RequestWithUrl(url, configuration)
 			}
 		}()
@@ -282,7 +282,7 @@ func NewConfiguration() *Configuration {
 	return configuration
 }
 
-func RequestWithUrl(url string, configuration *Configuration) (*http.Request) {
+func RequestWithUrl(url string, configuration *Configuration) *http.Request {
 	req, _ := http.NewRequest(configuration.method,
 		url,
 		bytes.NewReader(configuration.postData))
@@ -339,7 +339,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				fmt.Printf("Error connecting to %s: %s\n", req.URL, err)
 			}
 
-			metrics.GetOrRegisterCounter("net_connect_errors." + req.URL.Host,
+			metrics.GetOrRegisterCounter("net_connect_errors."+req.URL.Host,
 				metrics.DefaultRegistry).Inc(1)
 
 			metrics.GetOrRegisterCounter("net_connect_errors",
@@ -391,7 +391,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 		time.Duration(writeTimeout)*time.Millisecond)
 
 	for result.requests < configuration.requestLimit {
-		req := <- configuration.requests
+		req := <-configuration.requests
 
 		if configuration.keepAlive == true {
 			req.Header.Add("Connection", "keep-alive")

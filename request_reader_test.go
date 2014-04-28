@@ -1,18 +1,20 @@
 package main
 
 import (
-	"testing"
-	"io/ioutil"
-	"syscall"
-	"os"
-	"net/http"
-	"fmt"
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"syscall"
+	"testing"
 )
 
-func expectUrlPathsInFile(t *testing.T, contents string, expected []string) ([]*http.Request) {
+func expectUrlPathsInFile(t *testing.T, contents string, expected []string) []*http.Request {
 	f, err := ioutil.TempFile("", "testcontent")
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	defer syscall.Unlink(f.Name())
 
 	ioutil.WriteFile(f.Name(), []byte(contents), (os.FileMode)(0644))
@@ -38,19 +40,19 @@ func expectUrlPathsInFile(t *testing.T, contents string, expected []string) ([]*
 func TestTwoRequestsNoHeaders(t *testing.T) {
 	expectUrlPathsInFile(t,
 		"GET /foo HTTP/1.1\n\nGET /bar HTTP/1.1\n\n",
-		[]string { "/foo", "/bar" })
+		[]string{"/foo", "/bar"})
 }
 
 func TestInfiniteRequestReading(t *testing.T) {
 	expectUrlPathsInFile(t,
 		"GET /foo HTTP/1.1\n\nGET /bar HTTP/1.1\n\n",
-		[]string { "/foo", "/bar", "/foo", "/bar" })
+		[]string{"/foo", "/bar", "/foo", "/bar"})
 }
 
 func TestTwoRequestsWithHeaders(t *testing.T) {
 	requests := expectUrlPathsInFile(t,
 		"GET /foo HTTP/1.1\nHost: localhost\nX-Test: Test1\n\nGET /bar HTTP/1.1\nHost: localhost\nX-Test: Test2\n\n",
-		[]string { "/foo", "/bar" })
+		[]string{"/foo", "/bar"})
 
 	for i, req := range requests {
 		if req.Host != "localhost" {
@@ -71,14 +73,13 @@ func TestTwoRequestsWithHeaders(t *testing.T) {
 		}
 	}
 
-
 }
 
 func TestTwoRequestsWithHeadersAndBody(t *testing.T) {
 	requests := expectUrlPathsInFile(t,
-		"POST /foo HTTP/1.1\nHost: localhost\nContent-Type: application/json\nContent-Length: 18\n\n{\n\n\"test\":true\n\n}\n" +
+		"POST /foo HTTP/1.1\nHost: localhost\nContent-Type: application/json\nContent-Length: 18\n\n{\n\n\"test\":true\n\n}\n"+
 			"POST /bar HTTP/1.1\nHost: localhost\nContent-Type: application/json\nContent-Length: 18\n\n{\n\n\"test\":true\n\n}\n",
-		[]string { "/foo", "/bar" })
+		[]string{"/foo", "/bar"})
 
 	for _, req := range requests {
 		if req.Host != "localhost" {

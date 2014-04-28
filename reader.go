@@ -45,9 +45,9 @@ func (ilr *InfiniteLineReader) init() {
 
 func NewInfiniteLineReader(path string) (result *InfiniteLineReader) {
 	result = &InfiniteLineReader{
-		path:    path,
-		file:    nil,
-		scanner: nil,
+		path:        path,
+		file:        nil,
+		scanner:     nil,
 		lineCounter: 0,
 	}
 	result.init()

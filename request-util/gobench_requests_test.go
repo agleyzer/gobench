@@ -1,13 +1,13 @@
 package main
 
 import (
-	"testing"
-	"strings"
-	"net/http"
-	"net/url"
 	"bufio"
 	"bytes"
 	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
 )
 
 func tryWriteRequest(url string) (*http.Request, error) {
@@ -39,7 +39,7 @@ func TestRewriteVersionToV3(t *testing.T) {
 }
 
 func TestAddNYTAppHeaderTo80PercentOfAndroidRequests(t *testing.T) {
-	urls := []string {
+	urls := []string{
 		"http://localhost/cms/mobile/v3/json/android/homepage.json",
 		"http://localhost/cms/mobile/v3/json/android_tablet/latestfeed.json",
 		"http://localhost/cms/mobile/v3/json/kindle_fire/arts.json",
