@@ -1,3 +1,16 @@
+/*
+This is a utility used to convert/transform files representing a bunch of requests.
+
+In its first form, you can use it to process a file that contains urls, one per line, and produce
+the corresponding requests as they would be sent to the server, using the GET method.  Any additional
+transformations defined in writeRequest will be applied.
+
+In its second form, you can use it process a file that already contains request data, and apply the
+defined transformations before producing the output.
+
+The idea is to update this utility as additional types of requests or additional requirements per request are needed
+for load testing instances.
+ */
 package main
 
 import (
@@ -25,7 +38,7 @@ var (
 func init() {
 	flag.StringVar(&inputUrlsPath, "inUrls", "", "URLs input path (line separated)")
 	flag.StringVar(&inputRequestsPath, "in", "", "Full requests input path")
-	flag.StringVar(&outputRequestsPath, "out", "", "Full requests output path")
+	flag.StringVar(&outputRequestsPath, "out", "", "Full requests output path; using - will force output to stdout")
 }
 
 func main() {
