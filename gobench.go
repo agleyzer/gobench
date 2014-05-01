@@ -44,6 +44,8 @@ var (
 	generatorId      string
 	hostOverride     string
 	hostFileOverride string
+	version          string
+	showVersion      bool
 )
 
 type Configuration struct {
@@ -132,7 +134,7 @@ func init() {
 	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
 	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
 	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
-
+	flag.BoolVar(&showVersion, "version", false, "Show gobench version")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -188,6 +190,14 @@ func readRequests(path string, out chan *http.Request) {
 }
 
 func NewConfiguration() *Configuration {
+
+	if showVersion {
+		if version == "" {
+			log.Fatal("Program was compiled without version information")
+		}
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	if requestsFilePath == "" && urlsFilePath == "" && url == "" {
 		flag.Usage()
