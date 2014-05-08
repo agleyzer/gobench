@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"runtime/pprof"
 	"strconv"
 	"sync"
 	"syscall"
@@ -47,7 +46,6 @@ var (
 	hostFileOverride string
 	version          string
 	showVersion      bool
-	cpuProfile       string
 )
 
 type Configuration struct {
@@ -137,7 +135,6 @@ func init() {
 	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
 	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
 	flag.BoolVar(&showVersion, "version", false, "Show gobench version")
-	flag.StringVar(&cpuProfile, "cpuprofile", "", "Write cpu profile into file")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -469,23 +466,6 @@ func main() {
 	flag.Parse()
 
 	configuration := NewConfiguration()
-
-	if cpuProfile != "" {
-		log.Printf("CPU profiling is enabled")
-
-		f, err := os.Create(cpuProfile)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-
-		atexit(func() {
-			log.Printf("Writing CPU profile")
-			pprof.StopCPUProfile()
-			f.Close()
-		})
-	}
 
 	goMaxProcs := os.Getenv("GOMAXPROCS")
 
