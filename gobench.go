@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"syscall"
@@ -46,6 +47,7 @@ var (
 	hostFileOverride string
 	version          string
 	showVersion      bool
+	cpuProfile       string
 )
 
 type Configuration struct {
@@ -135,6 +137,7 @@ func init() {
 	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
 	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
 	flag.BoolVar(&showVersion, "version", false, "Show gobench version")
+	flag.StringVar(&cpuProfile, "cpuprofile", "", "Write cpu profile into file")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -180,6 +183,16 @@ func readLines(path string, out chan string) {
 	}
 }
 
+// makeReq is a function that creates requests out of urls
+func readRequestsFromLines(path string, makeReq func(string)*http.Request, out chan *http.Request) {
+	reader := NewInfiniteLineReader(path)
+	defer reader.Close()
+
+	for {
+		out <- makeReq(reader.NextLine())
+	}
+}
+
 func readRequests(path string, out chan *http.Request) {
 	reader := NewInfiniteRequestReader(path)
 	defer reader.Close()
@@ -217,7 +230,7 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		requests:     make(chan *http.Request, clients),
+		requests:     make(chan *http.Request, clients * 100),
 		hosts:        nil,
 		method:       "GET",
 		postData:     nil,
@@ -256,18 +269,16 @@ func NewConfiguration() *Configuration {
 	}
 
 	if requestsFilePath != "" {
-
 		go readRequests(requestsFilePath, configuration.requests)
 
 	} else if urlsFilePath != "" {
-		urls := make(chan string, clients)
-		go readLines(urlsFilePath, urls)
-		go func() {
-			for {
-				url := <-urls
-				configuration.requests <- RequestWithUrl(url, configuration)
-			}
-		}()
+
+		makeReq := func(url string) *http.Request {
+			return  RequestWithUrl(url, configuration)
+		}
+
+		go readRequestsFromLines(urlsFilePath, makeReq, configuration.requests)
+
 	} else if url != "" {
 		go func() {
 			for {
@@ -277,11 +288,11 @@ func NewConfiguration() *Configuration {
 	}
 
 	if hostFileOverride != "" {
-		configuration.hosts = make(chan string, clients)
+		configuration.hosts = make(chan string, clients * 100)
 		go readLines(hostFileOverride, configuration.hosts)
 
 	} else if hostOverride != "" {
-		configuration.hosts = make(chan string, clients)
+		configuration.hosts = make(chan string, clients * 100)
 		go func() {
 			for {
 				configuration.hosts <- hostOverride
@@ -423,6 +434,23 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 	done.Done()
 }
 
+
+// global defer/cleanup solution, since we are throwing signals and
+// os.Exit around
+var atexitFuncs []func()
+
+func atexit(f func()) {
+	atexitFuncs = append(atexitFuncs, f)
+}
+
+func exit(exitStatus int) {
+	for _, f := range atexitFuncs {
+		f()
+	}
+	os.Exit(exitStatus)
+}
+
+
 func main() {
 	startTime := time.Now()
 
@@ -431,15 +459,33 @@ func main() {
 
 	signalChannel := make(chan os.Signal, 2)
 	signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
 		_ = <-signalChannel
 		printResults(results, startTime)
-		os.Exit(0)
+		exit(0)
 	}()
 
 	flag.Parse()
 
 	configuration := NewConfiguration()
+
+	if cpuProfile != "" {
+		log.Printf("CPU profiling is enabled")
+
+		f, err := os.Create(cpuProfile)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+
+		atexit(func() {
+			log.Printf("Writing CPU profile")
+			pprof.StopCPUProfile()
+			f.Close()
+		})
+	}
 
 	goMaxProcs := os.Getenv("GOMAXPROCS")
 
@@ -473,7 +519,6 @@ func main() {
 		result := &Result{}
 		results[i] = result
 		go client(configuration, result, &done)
-
 	}
 
 	log.Println("Waiting for results...")
@@ -481,4 +526,5 @@ func main() {
 	done.Wait()
 
 	printResults(results, startTime)
+	exit(0)
 }
