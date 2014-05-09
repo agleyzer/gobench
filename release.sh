@@ -15,8 +15,10 @@ fi
 
 VERSION=$(git log -1 --format='%h')
 
-go install -a -ldflags "-X main.version $VERSION"
+go clean
 
-cp $GOPATH/bin/gobench $GOPATH/bin/gobench.$VERSION
+go build -ldflags "-X main.version $VERSION"
 
-echo "$GOPATH/bin/gobench.$VERSION"
+mv gobench gobench.$VERSION
+
+echo "gobench.$VERSION"

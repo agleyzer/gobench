@@ -181,7 +181,7 @@ func readLines(path string, out chan string) {
 }
 
 // makeReq is a function that creates requests out of urls
-func readRequestsFromLines(path string, makeReq func(string)*http.Request, out chan *http.Request) {
+func readRequestsFromLines(path string, makeReq func(string) *http.Request, out chan *http.Request) {
 	reader := NewInfiniteLineReader(path)
 	defer reader.Close()
 
@@ -227,7 +227,7 @@ func NewConfiguration() *Configuration {
 	}
 
 	configuration := &Configuration{
-		requests:     make(chan *http.Request, clients * 100),
+		requests:     make(chan *http.Request, clients*10),
 		hosts:        nil,
 		method:       "GET",
 		postData:     nil,
@@ -271,7 +271,7 @@ func NewConfiguration() *Configuration {
 	} else if urlsFilePath != "" {
 
 		makeReq := func(url string) *http.Request {
-			return  RequestWithUrl(url, configuration)
+			return RequestWithUrl(url, configuration)
 		}
 
 		go readRequestsFromLines(urlsFilePath, makeReq, configuration.requests)
@@ -285,11 +285,11 @@ func NewConfiguration() *Configuration {
 	}
 
 	if hostFileOverride != "" {
-		configuration.hosts = make(chan string, clients * 100)
+		configuration.hosts = make(chan string, clients*10)
 		go readLines(hostFileOverride, configuration.hosts)
 
 	} else if hostOverride != "" {
-		configuration.hosts = make(chan string, clients * 100)
+		configuration.hosts = make(chan string, clients*10)
 		go func() {
 			for {
 				configuration.hosts <- hostOverride
@@ -304,6 +304,9 @@ func RequestWithUrl(url string, configuration *Configuration) *http.Request {
 	req, _ := http.NewRequest(configuration.method,
 		url,
 		bytes.NewReader(configuration.postData))
+
+	req.Header.Add("Accept-encoding", "gzip")
+
 	return req
 }
 
@@ -431,7 +434,6 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 	done.Done()
 }
 
-
 // global defer/cleanup solution, since we are throwing signals and
 // os.Exit around
 var atexitFuncs []func()
@@ -446,7 +448,6 @@ func exit(exitStatus int) {
 	}
 	os.Exit(exitStatus)
 }
-
 
 func main() {
 	startTime := time.Now()
