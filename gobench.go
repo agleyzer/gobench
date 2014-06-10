@@ -44,7 +44,7 @@ var (
 	graphiteServer   string
 	generatorId      string
 	hostOverride     string
-	hostOverrideDns  bool
+	hostOverrideDns  string
 	hostFileOverride string
 	version          string
 	showVersion      bool
@@ -135,7 +135,7 @@ func init() {
 	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
 	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
 	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
-	flag.BoolVar(&hostOverrideDns, "host-dns", false, "Use custom DNS resolver with host override")
+	flag.StringVar(&hostOverrideDns, "host-dns", "NONE", "Use custom DNS resolver with host override")
 	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
 	flag.BoolVar(&showVersion, "version", false, "Show gobench version")
 }
@@ -294,8 +294,8 @@ func NewConfiguration() *Configuration {
 	} else if hostOverride != "" {
 		configuration.hosts = make(chan string, clients*10)
 
-		if hostOverrideDns {
-			go dns(configuration.hosts, 10*time.Second, hostOverride)
+		if hostOverrideDns != "NONE" {
+			go dns(hostOverrideDns, configuration.hosts, 10*time.Second, hostOverride)
 		} else {
 			go func() {
 				for {
