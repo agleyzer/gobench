@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -43,6 +44,7 @@ var (
 	graphiteServer   string
 	generatorId      string
 	hostOverride     string
+	hostOverrideDns  string
 	hostFileOverride string
 	version          string
 	showVersion      bool
@@ -133,6 +135,7 @@ func init() {
 	flag.StringVar(&graphiteServer, "gs", "", "Graphite server")
 	flag.StringVar(&generatorId, "id", defaultGeneratorId(), "Generator id (e.g. for Graphite)")
 	flag.StringVar(&hostOverride, "host", "", "Override host for all URLs")
+	flag.StringVar(&hostOverrideDns, "host-dns", "NONE", "Use custom DNS resolver with host override")
 	flag.StringVar(&hostFileOverride, "hostfile", "", "File containing override hosts for all URLs")
 	flag.BoolVar(&showVersion, "version", false, "Show gobench version")
 }
@@ -290,11 +293,16 @@ func NewConfiguration() *Configuration {
 
 	} else if hostOverride != "" {
 		configuration.hosts = make(chan string, clients*10)
-		go func() {
-			for {
-				configuration.hosts <- hostOverride
-			}
-		}()
+
+		if hostOverrideDns != "NONE" {
+			go dns(hostOverrideDns, configuration.hosts, 10*time.Second, hostOverride)
+		} else {
+			go func() {
+				for {
+					configuration.hosts <- hostOverride
+				}
+			}()
+		}
 	}
 
 	return configuration
@@ -337,6 +345,11 @@ func MyClient(result *Result, connectTimeout, readTimeout, writeTimeout time.Dur
 	}
 }
 
+// remove periods from host name so Graphite does not get confused
+func fixHostname(host string) string {
+	return strings.Replace(host, ".", "_", -1)
+}
+
 func client(configuration *Configuration, result *Result, done *sync.WaitGroup) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -360,7 +373,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 				fmt.Printf("Error connecting to %s: %s\n", req.URL, err)
 			}
 
-			metrics.GetOrRegisterCounter("net_connect_errors."+req.URL.Host,
+			metrics.GetOrRegisterCounter("net_connect_errors."+fixHostname(req.URL.Host),
 				metrics.DefaultRegistry).Inc(1)
 
 			metrics.GetOrRegisterCounter("net_connect_errors",
@@ -425,6 +438,11 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 			req.URL.Host = host
 			req.Host = host
 		}
+
+		hostCounter := metrics.GetOrRegisterCounter(
+			"host."+fixHostname(req.URL.Host), metrics.DefaultRegistry)
+
+		hostCounter.Inc(1)
 
 		req.Header.Add("Cookie", authCookie)
 

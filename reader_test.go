@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func test(t *testing.T, file string, expected []string) {
+func test_reader(t *testing.T, file string, expected []string) {
 	f, err := ioutil.TempFile("", "testcontent")
 	if err != nil {
 		panic(err)
@@ -27,13 +27,13 @@ func test(t *testing.T, file string, expected []string) {
 }
 
 func TestNoTrailingNl(t *testing.T) {
-	test(t,
+	test_reader(t,
 		"foo\nbar\nbaz",
 		[]string{"foo", "bar", "baz", "foo", "bar", "baz"})
 }
 
 func TestRegular(t *testing.T) {
-	test(t,
+	test_reader(t,
 		"foo\nbar\nbaz\n",
 		[]string{"foo", "bar", "baz", "foo", "bar", "baz"})
 }
