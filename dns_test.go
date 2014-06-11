@@ -11,7 +11,10 @@ import (
 func TestDns(t *testing.T) {
 	ch := make(chan string)
 	d, _ := time.ParseDuration("10s")
-	go dns(ch, d, "google.com")
+
+	// Empty DNS server means use system's resolver. I could try
+	// Google's 8.8.8.8 but my office network seems to block those.
+	go dns("", ch, d, "google.com")
 
 	host_map := make(map[string]int)
 	for i := 0; i < 10000; i++ {

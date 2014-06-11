@@ -69,8 +69,10 @@ func customResolve(dnsServer string, host string) (addrs []string, err error) {
 	return
 }
 
-// sends a random resolved address to channel, refreshing DNS every
-// once in a while
+// Sends a random resolved address to channel, refreshing DNS every
+// once in a while.
+//
+// If 'dnsServer' is empty, system resolver will be used.
 func dns(dnsServer string, ch chan string, ttl time.Duration, hosts ...string) {
 	rand.Seed(time.Now().UnixNano())
 
